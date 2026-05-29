@@ -224,17 +224,38 @@ Get:5 http://ports.ubuntu.com jammy/main armhf c-n-f Metadata [28.9 kB]
 
 ---
 
-### Git 提交
+### 持久化修复
 
-```
-commit af7d596487b2dcfbc631eb922c622762d72eb10e (HEAD -> main)
-Author: liaic <liaic@local>
-Date:   Fri May 29 22:22:06 2026 +0800
+为了在未来的镜像构建中自动应用 DNS 配置修复，已修改 `userpatches/customize-image.sh`：
 
-    feat(board): add pbsbc01h3lite board support
-```
-
-查看完整 diff：
 ```bash
-git -C build/ show af7d596
+# 在 jammy 镜像中自动配置 DNS
+if [[ "$BOARD" == "pbsbc01h3lite" ]]; then
+    cat >> /etc/systemd/resolved.conf << 'EOF'
+[Resolve]
+DNS=8.8.8.8 8.8.4.4 1.1.1.1
+FallbackDNS=8.8.8.8 1.1.1.1
+DNSSEC=allow-downgrade
+DNSOverTLS=no
+EOF
+fi
+```
+
+这样后续构建的镜像将在首次引导时即具备 DNS 解析能力，无需手动修复。
+
+---
+
+### Git 提交历史
+
+```
+f73879685 fix: add DNS configuration to customize-image.sh for pbsbc01h3lite
+408f45e2d docs: update CHANGELOG with network fixes and WiFi scan results
+6378d0c4b docs: add CHANGELOG for pbsbc01h3lite board build
+af7d59648 feat(board): add pbsbc01h3lite board support
+```
+
+查看完整历史：
+```bash
+cd build/
+git log --stat HEAD~3..HEAD
 ```
