@@ -1,0 +1,155 @@
+# CHANGELOG — pbsbc01h3lite Armbian Build
+
+## [26.05.0-trunk] — 2026-05-29
+
+### 目标
+
+为 pbsbc01h3 Lite 板（Allwinner H3，512MB/1GB RAM）构建完整的 Armbian Jammy 镜像，
+启用以下三项硬件功能：
+
+| 功能 | 接口 | 验证结果 |
+|------|------|---------|
+| 有线以太网 (EMAC) | H3 内置 10/100 MII PHY | `eth0` DHCP 获取到 IP |
+| XR819 WiFi | SDIO/mmc1 | `wlan0` 固件 XR_C01.08.52.58 加载成功 |
+| USB OTG 串口 (g_serial) | USB OTG 外设模式 | `/sys/class/udc/musb-hdrc.4.auto` 出现 |
+
+---
+
+### 新增文件
+
+#### 1. 板卡配置 `userpatches/config/boards/pbsbc01h3lite.csc`
+
+```
+git show af7d596 -- userpatches/config/boards/pbsbc01h3lite.csc
+```
+
+关键设置：
+
+- `BOARDFAMILY="sun8i"` — Allwinner H3/H2+ 家族
+- `BOOTCONFIG="orangepi_lite_defconfig"` — 复用 OrangePi Lite U-Boot 配置
+- `BOOT_FDT_FILE="sun8i-h3-pbsbc01h3-lite.dtb"` — 指向自定义 DTB
+- `MODULES_CURRENT="g_serial"` — 启动时加载 USB OTG 串口 gadget 模块
+- `DEFAULT_OVERLAYS="usbhost2 usbhost3"` — 启用 USB HOST 2/3 端口
+- U-Boot 后处理 hook：DRAM 时钟设为 624 MHz，ZQ=3881979，ODT 启用
+
+#### 2. 内核 DTS 补丁 `userpatches/kernel/archive/sunxi-6.18/0001-arm-dts-allwinner-add-pbsbc01h3-lite.patch`
+
+```
+git show af7d596 -- "userpatches/kernel/archive/sunxi-6.18/0001-arm-dts-allwinner-add-pbsbc01h3-lite.patch"
+```
+
+补丁在内核树中创建了两个文件：
+
+**`arch/arm/boot/dts/allwinner/Makefile`** (+1 行)
+```diff
+@@ -243,6 +243,7 @@ dtb-$(CONFIG_MACH_SUN8I) += \
+        sun8i-h3-orangepi-lite.dtb \
+        sun8i-h3-orangepi-one.dtb \
+        sun8i-h3-orangepi-pc.dtb \
++       sun8i-h3-pbsbc01h3-lite.dtb \
+        sun8i-h3-orangepi-pc-plus.dtb \
+```
+
+**`arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts`** (新建，51 行)
+
+继承 `sun8i-h3-orangepi-lite.dts`，覆盖以下节点：
+
+| 节点 | 作用 | GPIO（来源：legacy fex） |
+|------|------|------------------------|
+| `wifi_pwrseq` | XR819 电源时序 | PL7 (`r_pio 0 7`) ACTIVE_LOW — wl_reg_on |
+| `&emac` | 内置 MII PHY 以太网 | 无外部 PHY，`phy-mode = "mii"` |
+| `&mmc1` | XR819 SDIO WiFi（替换 RTL8189FTV） | PG10 (`pio 6 10`) EDGE_RISING — wl_host_wake |
+| `&usb_otg` | USB OTG 外设模式 | — |
+| `&usbphy` | OTG ID 检测 | PG12 (`pio 6 12`) ACTIVE_HIGH |
+
+> GPIO 来源：`pbsbc01h3-build/external/config/fex/pbsbc01h3lite.fex`  
+> 确认 `gmac_used = 0`（无外部 RGMII，使用内部 MII PHY）
+
+---
+
+### 调试过程（关键节点）
+
+#### 问题一：运行中镜像的 DTS 为最小配置
+
+首次编译（未修改 DTS 时）产生的运行镜像中，DTB 只包含板卡标识，
+没有 EMAC / OTG / WiFi 节点。通过串口（ttyUSB0）进行板上诊断：
+
+```bash
+# dmesg | grep -iE "emac|stmmac|gmac"   → 空（无以太网驱动）
+# ip link                                → 仅 lo
+# ls /sys/class/udc/                     → 空（OTG 不可用）
+```
+
+#### 问题二：DTS 研究
+
+从 legacy fex 文件提取 GPIO 分配，确认：
+- `gmac_used = 0` → H3 内置 MII PHY，而非外部 RGMII
+- `wl_reg_on = PL7`、`wl_host_wake = PG10`
+- `usb_id_gpio = PG12`
+
+#### 问题三：DTB 热部署验证
+
+DTS 修改后先通过 Docker 编译 DTB，再通过 Python pyserial + base64 方式
+通过串口传输到板上，无需完整重新构建即可验证硬件配置是否正确。
+
+#### 问题四：补丁文件格式错误（导致首次完整构建失败）
+
+| 错误 | 原因 | 修复 |
+|------|------|------|
+| Makefile hunk 行号不符 | 行号写为 238，实际为 243 | 更正为 `@@ -243,6 +243,7 @@` |
+| Makefile 上下文缺少 TAB | 内容行用空格而非 `\t` | 替换为真实 tab 字符 |
+| DTS hunk 行数不符 | 头部写 `+1,57`，实际只有 51 行 | 更正为 `+1,51` |
+
+补丁格式修复后通过干运行验证：
+```bash
+patch --dry-run -p1 < userpatches/kernel/archive/sunxi-6.18/0001-arm-dts-allwinner-add-pbsbc01h3-lite.patch
+# → checking file arch/arm/boot/dts/allwinner/Makefile  ✓
+# → checking file arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts  ✓
+```
+
+---
+
+### 构建命令
+
+```bash
+cd build/
+./compile.sh build \
+  BOARD=pbsbc01h3lite \
+  BRANCH=current \
+  BUILD_DESKTOP=no \
+  BUILD_MINIMAL=no \
+  DOCKERFILE_USE_ARMBIAN_IMAGE_AS_BASE=no \
+  KERNEL_CONFIGURE=no \
+  KERNEL_GIT=shallow \
+  RELEASE=jammy \
+  UBOOT_CONFIGURE=no
+```
+
+构建时间：约 17 分钟（Docker 容器内，含完整内核编译）
+
+---
+
+### 构建产物
+
+```
+output/images/Armbian-unofficial_26.05.0-trunk_Pbsbc01h3lite_jammy_current_6.18.33.img
+  大小：2.3 GB
+  SHA256：6c8c1796702c4dd1555ec2c14cec95955dde52e28bdcc609171e3a1b7fa35d6e
+```
+
+---
+
+### Git 提交
+
+```
+commit af7d596487b2dcfbc631eb922c622762d72eb10e (HEAD -> main)
+Author: liaic <liaic@local>
+Date:   Fri May 29 22:22:06 2026 +0800
+
+    feat(board): add pbsbc01h3lite board support
+```
+
+查看完整 diff：
+```bash
+git -C build/ show af7d596
+```
