@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: liaic <liaic@local>
+Date: Fri, 29 May 2026 10:00:00 +0000
+Subject: [PATCH] arm: dts: allwinner: add pbsbc01h3 lite board
+
+---
+ arch/arm/boot/dts/allwinner/Makefile                     |  1 +
+ arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts | 51 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 52 insertions(+)
+ create mode 100644 arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts
+
+diff --git a/arch/arm/boot/dts/allwinner/Makefile b/arch/arm/boot/dts/allwinner/Makefile
+index 111111111111..222222222222 100644
+--- a/arch/arm/boot/dts/allwinner/Makefile
++++ b/arch/arm/boot/dts/allwinner/Makefile
+@@ -243,6 +243,7 @@ dtb-$(CONFIG_MACH_SUN8I) += \
+ 	sun8i-h3-orangepi-lite.dtb \
+ 	sun8i-h3-orangepi-one.dtb \
+ 	sun8i-h3-orangepi-pc.dtb \
++	sun8i-h3-pbsbc01h3-lite.dtb \
+ 	sun8i-h3-orangepi-pc-plus.dtb \
+ 	sun8i-h3-orangepi-plus.dtb \
+ 	sun8i-h3-orangepi-plus2e.dtb \
+diff --git a/arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts b/arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts
+new file mode 100644
+index 000000000000..111111111111
+--- /dev/null
++++ b/arch/arm/boot/dts/allwinner/sun8i-h3-pbsbc01h3-lite.dts
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++
++/dts-v1/;
++#include "sun8i-h3-orangepi-lite.dts"
++
++/ {
++	model = "Xunlong pbsbc01h3 Lite";
++	compatible = "xunlong,pbsbc01h3-lite", "xunlong,orangepi-lite", "allwinner,sun8i-h3";
++
++	aliases {
++		ethernet0 = &emac;
++		ethernet1 = &xr819;
++	};
++
++	wifi_pwrseq: pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		reset-gpios = <&r_pio 0 7 GPIO_ACTIVE_LOW>; /* PL7 = wl_reg_on */
++		post-power-on-delay-ms = <200>;
++	};
++};
++
++/* H3 internal 10/100 Mbps MII ethernet */
++&emac {
++	phy-handle = <&int_mii_phy>;
++	phy-mode = "mii";
++	allwinner,leds-active-low;
++	status = "okay";
++};
++
++/* XR819 SDIO WiFi on mmc1 - replaces RTL8189FTV */
++&mmc1 {
++	mmc-pwrseq = <&wifi_pwrseq>;
++
++	xr819: wifi@1 {
++		compatible = "xradio,xr819";
++		interrupt-parent = <&pio>;
++		interrupts = <6 10 IRQ_TYPE_EDGE_RISING>; /* PG10 = wl_host_wake */
++		interrupt-names = "host-wake";
++	};
++};
++
++/* USB OTG as peripheral for g_serial / CDC gadget */
++&usb_otg {
++	dr_mode = "peripheral";
++	status = "okay";
++};
++
++&usbphy {
++	usb0_id_det-gpios = <&pio 6 12 GPIO_ACTIVE_HIGH>; /* PG12 */
++	status = "okay";
++};
