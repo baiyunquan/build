@@ -259,3 +259,107 @@ af7d59648 feat(board): add pbsbc01h3lite board support
 cd build/
 git log --stat HEAD~3..HEAD
 ```
+
+---
+
+### XFCE4 桌面与 GPU 驱动调试（2026-05-29 实机测试）
+
+#### 问题：HDMI 显示器无图像，LightDM 启动失败
+
+用户通过 `armbian-config` 安装 XFCE4 桌面后，HDMI 无输出，`systemctl status lightdm` 显示 `failed`。
+
+**诊断过程（通过 SSH）**：
+
+```bash
+# journalctl -u lightdm --no-pager | tail -20
+# → Failed to find session configuration slick-greeter
+```
+
+发现三个根本原因：
+
+| 问题 | 原因 |
+|------|------|
+| LightDM 报错 `slick-greeter` 未找到 | armbian-config 默认配置引用 `slick-greeter`，但该包未安装 |
+| Xorg 未安装 | `armbian-config` 仅安装 xfce4 库文件，未安装 `xserver-xorg` |
+| xfce4 桌面组件不完整 | 缺少 `xfce4`、`xfce4-terminal`、`xfdesktop4` 等核心包 |
+
+#### GPU / 显示硬件状态（验证通过）
+
+```bash
+# lsmod | grep -E "lima|drm"
+lima 49152 0
+gpu_sched 36864 1 lima
+drm_shmem_helper 16384 1 lima
+
+# cat /sys/class/drm/card0-HDMI-A-1/status
+connected
+
+# ls /dev/dri/
+card0  card1  renderD128
+```
+
+- ✅ Lima GPU 驱动已加载（Allwinner H3 Mali-400 开源驱动）
+- ✅ HDMI-A-1 已连接，EDID 256 字节可读
+- ✅ DRI 设备节点存在（DRI2/DRI3 支持）
+
+#### 解决方案
+
+**Step 1：安装缺失软件包**
+
+```bash
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    xserver-xorg \
+    xserver-xorg-video-fbdev \
+    xserver-xorg-video-modesetting \
+    xfce4 \
+    xfce4-terminal \
+    lightdm-gtk-greeter
+```
+
+安装时间：约 20 分钟（H3 CPU 满载，dpkg configure 阶段 CPU 占用率 ~100%）
+
+**Step 2：覆盖 greeter 配置（slick-greeter → lightdm-gtk-greeter）**
+
+```bash
+cat > /etc/lightdm/lightdm.conf.d/50-greeter-override.conf << 'EOF'
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+EOF
+```
+
+> 文件名 `50-greeter-override.conf` 数字大于原有的 `10-slick-greeter.conf`，  
+> LightDM 按字母序加载配置，后加载的设置覆盖前者。
+
+**Step 3：重启 LightDM**
+
+```bash
+systemctl restart lightdm
+```
+
+#### 验证结果
+
+```bash
+# systemctl is-active lightdm
+active
+
+# cat /sys/class/drm/card0-HDMI-A-1/status
+connected
+
+# grep "HDMI-1" /var/log/Xorg.0.log
+(II) modeset(0): Output HDMI-1 connected
+(II) modeset(0): Output HDMI-1 using initial mode 720x480 +0+0
+(II) modeset(0): [DRI2] Setup complete
+(II) modeset(0): [DRI2]   DRI driver: sun4i-drm
+```
+
+- ✅ **LightDM 运行中**（`active`）
+- ✅ **Xorg 进程存在**（PID 可见，监听 `:0`，运行于 vt7）
+- ✅ **HDMI 已连接并输出**（720x480，由显示器 EDID 决定）
+- ✅ **Lima GPU / modesetting 驱动正常**（DRI2 with `sun4i-drm`）
+- ✅ **lightdm-gtk-greeter 登录界面已显示在 HDMI**（greeter 进程可见）
+
+#### 注意事项
+
+- 连接的显示器 EDID 仅上报 SD 分辨率（720x480、720x576、640x480），故 Xorg 使用 720x480。若需 1080p，需连接支持高分辨率的显示器。
+- `lightdm-gtk-greeter` 日志中有若干 WARNING（背景图片缺失、language-tools 缺失），均为非致命错误，不影响桌面正常使用。
+- `accountsservice` 未运行（`org.freedesktop.Accounts` 服务未找到），lightdm 回退为读取 `/etc/passwd` 用户列表，功能正常。
