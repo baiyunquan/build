@@ -139,6 +139,91 @@ output/images/Armbian-unofficial_26.05.0-trunk_Pbsbc01h3lite_jammy_current_6.18.
 
 ---
 
+### 网络配置修复（2026-05-29 实机测试）
+
+#### 问题：DNS 无法解析，apt 无法使用
+
+首发版本的 `/etc/systemd/resolved.conf` 为默认模板，所有 DNS 配置行均被注释：
+```ini
+#DNS=
+#FallbackDNS=
+```
+
+导致 systemd-resolved 启动后无上游 DNS 服务器，无法进行域名解析。
+
+**症状**：
+```bash
+# ping bing.com   → Name or service not known
+# curl bing.com   → Could not resolve host
+# apt update      → (卡住，无法连接源)
+```
+
+#### 解决方案
+
+修改 `/etc/systemd/resolved.conf`，添加公有 DNS 服务器：
+
+```ini
+[Resolve]
+DNS=8.8.8.8 8.8.4.4 1.1.1.1
+FallbackDNS=8.8.8.8 1.1.1.1
+DNSSEC=allow-downgrade
+DNSOverTLS=no
+```
+
+重启 systemd-resolved：
+```bash
+systemctl restart systemd-resolved
+```
+
+#### 验证结果
+
+✅ **DNS 解析** 恢复：
+```bash
+# ping bing.com
+PING bing.com (150.171.28.10) 56(84) bytes of data.
+64 bytes from 150.171.28.10: icmp_seq=1 ttl=110 time=71.5 ms
+```
+
+✅ **HTTP 请求** 工作：
+```bash
+# curl -I bing.com
+HTTP/1.1 301 Moved Permanently
+Location: http://cn.bing.com/
+```
+
+✅ **apt 软件包管理** 恢复：
+```bash
+# apt update
+Hit:1 http://ports.ubuntu.com jammy InRelease
+Get:5 http://ports.ubuntu.com jammy/main armhf c-n-f Metadata [28.9 kB]
+```
+
+---
+
+### WiFi (XR819) 扫描测试
+
+#### 状态
+
+- **驱动**：已加载 (`xradio_wlan 106496`)
+- **固件**：XR_C01.08.52.58 已加载
+- **接口**：`wlan0` 存在，MAC `12:81:0c:10:bf:b1`
+
+#### 扫描结果
+
+目前 WiFi 扫描无返回结果（`iw wlan0 scan dump` 为空）。
+
+**可能原因**：
+- 天线配置需要后续优化（`iw phy` 显示 "Available Antennas: TX 0 RX 0"）
+- XR819 的中断（wl_host_wake GPIO PG10）可能未正确配置  
+- 驱动可能需要 regulatory domain 配置
+
+**后续工作**：
+- [ ] 核查 DTS 中 XR819 中断配置（PG10 电平有效性）
+- [ ] 检查 regulatory domain 配置
+- [ ] 可能需要补充天线功率配置
+
+---
+
 ### Git 提交
 
 ```
