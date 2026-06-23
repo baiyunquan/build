@@ -28,14 +28,35 @@ function output_images_compress_and_checksum() {
 	# *is* fair-shared among peers, with a 60% safety margin, so the level
 	# selection below picks the strongest preset that fits without OOMing
 	# even if every peer also reaches for its top level at the same instant.
-	declare host_threads active_jobs compress_threads mem_avail_mb mem_budget_mb
+	declare host_threads active_jobs compress_threads mem_avail_mb mem_budget_mb max_threads
 	host_threads=$(nproc)
+	# Cap threads: xz speedup is sublinear and its ratio slightly worsens past
+	# ~16 threads (more independent blocks), while peak memory grows linearly
+	# (~674MB/thread at -9). 16 also matches the 10 GiB xz memlimit below
+	# (16*674MB ~= 10.5GB), so -T rarely gets trimmed by the limit. On a
+	# 128-core box an image would otherwise grab ~91 threads and reserve ~61GB
+	# for marginal wall-time gain. Override per-build with COMPRESS_MAX_THREADS
+	# (set it >= nproc to disable the cap).
+	max_threads="${COMPRESS_MAX_THREADS:-16}"
+	# Guard against a non-numeric or zero override: bash arithmetic reads
+	# either as 0, which would set compress_threads=0 (xz/zstd -T0 = "use all
+	# cores") and silently collapse the cap. Fall back to the default 16.
+	[[ "${max_threads}" =~ ^[0-9]+$ ]] && (( max_threads >= 1 )) || max_threads=16
 	compress_threads=$host_threads
+	(( compress_threads > max_threads )) && compress_threads=$max_threads
 	active_jobs=$(pgrep -cx 'xz|zstd|zstdmt' 2>/dev/null || true)
 	[[ -z "${active_jobs}" ]] && active_jobs=0
 
 	mem_avail_mb=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
 	mem_budget_mb=$(( mem_avail_mb * 6 / 10 / (active_jobs + 1) ))
+
+	# Hard memory ceiling handed to `xz --memlimit-compress`: a backstop so the
+	# encoder scales its own thread count down rather than risking OOM. Default
+	# 10 GiB, lowered only when the host has less memory available than that.
+	# Override explicitly with IMAGE_XZ_MEMLIMIT (e.g. "4GiB").
+	declare xz_memlimit_mb=10240
+	(( mem_avail_mb < xz_memlimit_mb )) && xz_memlimit_mb=$mem_avail_mb
+	declare xz_memlimit="${IMAGE_XZ_MEMLIMIT:-${xz_memlimit_mb}MiB}"
 
 	# Pick the strongest xz preset that fits BOTH memory and CPU class. Each
 	# entry is "level:per-thread-MB:min-threads" — the min-threads floor
@@ -97,7 +118,7 @@ function output_images_compress_and_checksum() {
 	done
 
 	display_alert "Compression host" \
-		"nproc=${host_threads} loadavg=${loadavg} MemTotal=${mem_total_mb}MB MemAvail=${mem_avail_mb}MB" \
+		"nproc=${host_threads} (cap=${max_threads}) loadavg=${loadavg} MemTotal=${mem_total_mb}MB MemAvail=${mem_avail_mb}MB" \
 		"info"
 	display_alert "Compression resource share" \
 		"active_xz/zstd=${active_jobs} -> threads=${compress_threads}, budget=${mem_budget_mb}MB; pick xz=-${xz_elastic_level} zstd=-${zstd_elastic_level}" \
@@ -148,8 +169,8 @@ function output_images_compress_and_checksum() {
 		t_start=$SECONDS
 
 		if [[ $COMPRESS_OUTPUTIMAGE == *xz* ]]; then
-			display_alert "Compressing with xz" "${uncompressed_file_basename}.xz (-${xz_compression_ratio_image}, threads: ${file_threads}/${compress_threads}, size: ${file_size_mb}MB, block: ${xz_block_mb}MB, peak: ~${peak_mem_mb}MB)" "info"
-			xz -T "${file_threads}" "-${xz_compression_ratio_image}" "${uncompressed_file}" # "If xz is provided with input but no output, it will delete the input"
+			display_alert "Compressing with xz" "${uncompressed_file_basename}.xz (-${xz_compression_ratio_image}, threads: ${file_threads}/${compress_threads}, size: ${file_size_mb}MB, block: ${xz_block_mb}MB, peak: ~${peak_mem_mb}MB, memlimit: ${xz_memlimit})" "info"
+			xz --memlimit-compress="${xz_memlimit}" -T "${file_threads}" "-${xz_compression_ratio_image}" "${uncompressed_file}" # "If xz is provided with input but no output, it will delete the input"
 			compression_type=".xz"
 		elif [[ $COMPRESS_OUTPUTIMAGE == *zst* ]]; then
 			# zstd auto-scales workers to input size, so no explicit cap needed here.

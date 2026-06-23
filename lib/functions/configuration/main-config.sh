@@ -205,6 +205,15 @@ function do_main_configuration() {
 	# Defaults... # @TODO: why?
 	declare -g -r MAINLINE_UBOOT_DIR='u-boot'
 
+	# Opt-in cache-bust string for the u-boot artifact. A board/family that ships a
+	# prebuilt or externally-fetched u-boot blob (e.g. khadas-vim1/vim2) sets this —
+	# typically to the blob's upstream version — and bumps it whenever the blob
+	# changes, so the u-boot .deb repackages instead of reusing the cached artifact.
+	# It can't be a content hash: the blob may live outside this repo and not exist
+	# yet at matrix-prep. Folded into the artifact version by artifact-uboot.sh.
+	# (`:-` so it never clobbers a value a board/family already set.)
+	declare -g UBOOT_HASH_EXTRA="${UBOOT_HASH_EXTRA:-}"
+
 	# pre-calculate mirrors. important: this sets _SOURCE variants that might be used in common.conf to default things to mainline, but using mirror.
 	# @TODO: setting them here allows family/board code (and hooks) to read them and embed them into configuration, which is bad: it might end up without the mirror.
 	[[ $USE_MAINLINE_GOOGLE_MIRROR == yes ]] && MAINLINE_MIRROR=google
@@ -234,6 +243,11 @@ function do_main_configuration() {
 
 	[[ $USE_GITHUB_UBOOT_MIRROR == yes ]] && UBOOT_MIRROR=github # legacy compatibility?
 
+	# A CI runner that advertises a pass-through git proxy (GITPROXY_ADDRESS,
+	# exported from NetBox by the runner) selects the gitproxy mirror
+	# automatically, unless an explicit GITHUB_MIRROR was already set.
+	[[ -z $GITHUB_MIRROR && -n ${GITPROXY_ADDRESS:-} ]] && GITHUB_MIRROR=gitproxy
+
 	case $GITHUB_MIRROR in
 		fastgit)
 			declare -g -r GITHUB_SOURCE='https://hub.fastgit.xyz'
@@ -241,6 +255,9 @@ function do_main_configuration() {
 		ghproxy)
 			[[ -z $GHPROXY_ADDRESS ]] && GHPROXY_ADDRESS=ghfast.top
 			declare -g -r GITHUB_SOURCE="https://${GHPROXY_ADDRESS}/https://github.com"
+			;;
+		gitproxy)
+			declare -g -r GITHUB_SOURCE="${GITPROXY_ADDRESS}"
 			;;
 		gitclone)
 			declare -g -r GITHUB_SOURCE='https://gitclone.com/github.com'
